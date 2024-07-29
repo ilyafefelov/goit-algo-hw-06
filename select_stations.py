@@ -1,8 +1,8 @@
 import h5py
-import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
 import random
+import networkx as nx
 
 # Завантаження MAT файлу
 file_path = 'london_underground_clean.mat'
@@ -59,23 +59,19 @@ else:  # Default to 'start'
 edges_subset = extract_edges_check_zeros(station_indices)
 
 # Створимо граф для обраних станцій
-graph_subset = nx.Graph()
-
-# Додамо вузли (станції)
-for i in station_indices:
-    graph_subset.add_node(station_names[i])
+graph_subset = {station_names[i]: {} for i in station_indices}
 
 # Додамо ребра (зв'язки між станціями) для ненульових значень
 for edge in edges_subset:
     i, j, weight = edge
-    graph_subset.add_edge(station_names[i], station_names[j], weight=weight)
+    graph_subset[station_names[i]][station_names[j]] = weight
+    graph_subset[station_names[j]][station_names[i]] = weight
 
 # Аналізуємо характеристики графа
-num_nodes_subset = graph_subset.number_of_nodes()
-num_edges_subset = graph_subset.number_of_edges()
-degrees_subset = dict(graph_subset.degree())
-edge_weights = nx.get_edge_attributes(graph_subset, 'weight')
-
+num_nodes_subset = len(graph_subset)
+num_edges_subset = sum(len(edges) for edges in graph_subset.values()) // 2
+degrees_subset = {node: len(edges) for node, edges in graph_subset.items()}
+edge_weights = {(node, neighbor): weight for node, edges in graph_subset.items() for neighbor, weight in edges.items()}
 
 # Додаткове запитання для користувача про пошук найкоротших шляхів між заданими станціями
 search_paths = input("Do you want to find the shortest path between specific stations? (yes/no): ").strip().lower()
@@ -89,8 +85,7 @@ if search_paths == "yes":
         to_station = station_names[int(to_station)]
 
     try:
-        shortest_path = nx.shortest_path(graph_subset, source=from_station, target=to_station, weight='weight')
-        path_length = nx.shortest_path_length(graph_subset, source=from_station, target=to_station, weight='weight')
+        shortest_path, path_length = dijkstra(graph_subset, from_station, to_station)
         print(f"\nShortest path from {from_station} to {to_station}: {shortest_path}")
         print(f"Path length: {path_length}")
 
@@ -99,9 +94,9 @@ if search_paths == "yes":
             file.write(f"Path: {shortest_path}\n")
             file.write(f"Path length: {path_length}\n")
 
-    except nx.NetworkXNoPath:
+    except Exception as e:
         print(f"No path found between {from_station} and {to_station}.")
-        with open("readme.md", "wa") as file:
+        with open("readme.md", "a") as file:
             file.write(f"\n### Shortest Path from {from_station} to {to_station}\n")
             file.write(f"No path found.\n")
 
@@ -136,36 +131,105 @@ print("\n--------------------")
 print("Building graph...")
 
 # Візуалізуємо граф з відображенням ваг при наведенні
-pos = nx.spring_layout(graph_subset, k=0.15, iterations=20)
+G = nx.Graph()
+for node, edges in graph_subset.items():
+    G.add_node(node)
+    for neighbor, weight in edges.items():
+        G.add_edge(node, neighbor, weight=weight)
+
+pos = nx.spring_layout(G, k=0.15, iterations=20)
 plt.figure(figsize=(12, 12))
-nx.draw(graph_subset, pos, with_labels=True, node_size=50, node_color="skyblue", font_size=8, width=2, edge_color="black")
+nx.draw(G, pos, with_labels=True, node_size=50, node_color="skyblue", font_size=8, width=2, edge_color="black")
 
 # Додавання ваг ребер
-edge_labels = nx.get_edge_attributes(graph_subset, 'weight')
-nx.draw_networkx_edge_labels(graph_subset, pos, edge_labels=edge_labels)
+edge_labels = nx.get_edge_attributes(G, 'weight')
+nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
 
 plt.title(f"Subset of London Underground Network ({num_stations} Stations)")
 plt.show()
 
+# Реалізація алгоритмів BFS, DFS та Дейкстри
+def bfs(graph, start):
+    visited = []
+    queue = [start]
+
+    while queue:
+        node = queue.pop(0)
+        if node not in visited:
+            visited.append(node)
+            queue.extend(set(graph[node]) - set(visited))
+    return visited
+
+def dfs(graph, start):
+    visited = []
+    stack = [start]
+
+    while stack:
+        node = stack.pop()
+        if node not in visited:
+            visited.append(node)
+            stack.extend(set(graph[node]) - set(visited))
+    return visited
+
+def dijkstra(graph, start, goal):
+    shortest_distance = {}
+    predecessor = {}
+    unseen_nodes = dict(graph)
+    infinity = float('inf')
+    path = []
+    for node in unseen_nodes:
+        shortest_distance[node] = infinity
+    shortest_distance[start] = 0
+
+    while unseen_nodes:
+        min_node = None
+        for node in unseen_nodes:
+            if min_node is None:
+                min_node = node
+            elif shortest_distance[node] < shortest_distance[min_node]:
+                min_node = node
+
+        for child_node, weight in graph[min_node].items():
+            if weight + shortest_distance[min_node] < shortest_distance[child_node]:
+                shortest_distance[child_node] = weight + shortest_distance[min_node]
+                predecessor[child_node] = min_node
+        unseen_nodes.pop(min_node)
+
+    current_node = goal
+    while current_node != start:
+        try:
+            path.insert(0, current_node)
+            current_node = predecessor[current_node]
+        except KeyError:
+            print('Path not reachable')
+            break
+    path.insert(0, start)
+    if shortest_distance[goal] != infinity:
+        return path, shortest_distance[goal]
+    return None, None
+
 # Реалізація алгоритмів DFS і BFS
 start_node = station_names[station_indices[0]]
-dfs_path = list(nx.dfs_edges(graph_subset, source=start_node))
-bfs_path = list(nx.bfs_edges(graph_subset, source=start_node))
+dfs_path = dfs(graph_subset, start_node)
+bfs_path = bfs(graph_subset, start_node)
 
 # Реалізація алгоритму Дейкстри
-dijkstra_path = nx.single_source_dijkstra_path(graph_subset, source=start_node)
+dijkstra_path = {}
+for target in graph_subset:
+    if target != start_node:
+        path, _ = dijkstra(graph_subset, start_node, target)
+        if path:
+            dijkstra_path[target] = path
 
 # Порівняння результатів і обґрунтування
 comparison_results = []
 
 # Порівняння DFS і BFS
-dfs_path_nodes = [edge[1] for edge in dfs_path]
-bfs_path_nodes = [edge[1] for edge in bfs_path]
-common_nodes_dfs_bfs = set(dfs_path_nodes).intersection(set(bfs_path_nodes))
+common_nodes_dfs_bfs = set(dfs_path).intersection(set(bfs_path))
 
 comparison_results.append("### Comparison of DFS and BFS Paths\n")
-comparison_results.append(f"DFS Path: {dfs_path_nodes}\n")
-comparison_results.append(f"BFS Path: {bfs_path_nodes}\n")
+comparison_results.append(f"DFS Path: {dfs_path}\n")
+comparison_results.append(f"BFS Path: {bfs_path}\n")
 comparison_results.append("### Common Nodes\n")
 comparison_results.append(f"Common Nodes in DFS and BFS Paths: {common_nodes_dfs_bfs}\n")
 comparison_results.append("### DFS and BFS Explanation\n")
@@ -183,11 +247,11 @@ comparison_results.append("\nDijkstra's algorithm finds the shortest path betwee
 with open("readme.md", "a") as file:
     file.write(f"# Analysis and Pathfinding Results for {num_stations} Stations\n")
     file.write("## DFS Path\n")
-    for edge in dfs_path:
-        file.write(f"{edge}\n")
+    for node in dfs_path:
+        file.write(f"{node}\n")
     file.write("\n## BFS Path\n")
-    for edge in bfs_path:
-        file.write(f"{edge}\n")
+    for node in bfs_path:
+        file.write(f"{node}\n")
     file.write("\n## Dijkstra Shortest Paths\n")
     for target, path in dijkstra_path.items():
         file.write(f"{start_node} to {target}: {path}\n")
@@ -196,15 +260,14 @@ with open("readme.md", "a") as file:
 
 # Виводимо результати алгоритмів на консоль
 print("\nDFS Path:")
-for edge in dfs_path:
-    print(edge)
+for node in dfs_path:
+    print(node)
 
 print("\nBFS Path:")
-for edge in bfs_path:
-    print(edge)
+for node in bfs_path:
+    print(node)
 
 print("\nDijkstra Shortest Paths:")
 for target, path in dijkstra_path.items():
     print(f"{start_node} to {target}: {path}")
-
 
